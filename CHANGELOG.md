@@ -18,3 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Recoded the entire tool, this is a completely new version that supports new features below:
 ### Added
 - Copy transition time from local (Cloned states will now copy their respective transition time from their local states)
+
+## [1.1.1] - 12-19-2025
+## Changed
+- Changed the State section to use buttons to focus on the state you select
+
+## Added
+- Clear state(s) by prefixs

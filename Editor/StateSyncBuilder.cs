@@ -31,9 +31,16 @@ namespace JaxTools.StateSync
             int remoteId = FindStateIdByName(root, remoteTreeName);
             int defaultId = root.defaultState != null ? root.defaultState.GetInstanceID() : 0;
 
+            float minLocalX = float.PositiveInfinity;
+            Traverse(root, (parent, child) =>
+            {
+                minLocalX = Mathf.Min(minLocalX, child.position.x);
+            });
+
             var clonedByNumber = new Dictionary<int, AnimatorState>();
             var cloneParents = new Dictionary<int, AnimatorStateMachine>();
             var originalsByNumber = new Dictionary<int, AnimatorState>();
+            float maxCloneX = float.NegativeInfinity;
             Traverse(root, (parent, child) =>
             {
                 var state = child.state;
@@ -59,6 +66,7 @@ namespace JaxTools.StateSync
                 Vector3 pos = child.position;
                 pos.x = -pos.x;
                 UpdateChildPosition(parent, clone, pos);
+                maxCloneX = Mathf.Max(maxCloneX, pos.x);
 
                 // Ensure cloned states start disconnected.
                 clone.transitions = System.Array.Empty<AnimatorStateTransition>();
@@ -67,6 +75,22 @@ namespace JaxTools.StateSync
                 originalsByNumber[number] = state;
                 cloneParents[clone.GetInstanceID()] = parent;
             });
+
+            const float MinCloneGap = 50f;
+            if (clonedByNumber.Count > 0 && minLocalX < float.PositiveInfinity && maxCloneX > minLocalX - MinCloneGap)
+            {
+                float shift = maxCloneX - (minLocalX - MinCloneGap);
+                foreach (var clonePair in clonedByNumber)
+                {
+                    var clone = clonePair.Value;
+                    if (clone == null) continue;
+                    var parent = cloneParents.TryGetValue(clone.GetInstanceID(), out var p) ? p : root;
+                    if (!TryGetStatePosition(parent, clone.GetInstanceID(), out var pos))
+                        continue;
+                    pos.x -= shift;
+                    UpdateChildPosition(parent, clone, pos);
+                }
+            }
 
             EnsureIntParameter(controller, remoteParameterName);
             var targetMachine = root;

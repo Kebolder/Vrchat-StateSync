@@ -14,18 +14,24 @@ namespace JaxTools.StateSync
 
         private Vector2 layerScroll;
         private Vector2 stateScroll;
+        private Vector2 windowScroll;
 
         private readonly List<StateEntry> cachedStates = new();
         private bool needsRebuildStates;
 
         private const int MaxVisibleStateEntries = 4;
         private const int MaxVisibleLayerEntries = 4;
-        private const float EntryBoxHeight = 30f;
-        private const float EntrySpacing = 2f;
+        private const float EntryBoxHeight = 36f;
+        private const float EntrySpacing = 1f;
+        private const float StateNameMinWidth = 280f;
+        private const float AssignInputWidth = 44f;
+        private const float StateTagBoxWidth = 90f;
+        private const string StateButtonFrameHex = "dadada";
+        private const string StateLeftEmptyHex = "B8B8B8";
 
         // UI colors
         private static readonly Color Orange = ColorFromHex("ff6e00");
-        private static readonly Color LightGray = ColorFromHex("EEEEEE");
+        private static readonly Color LightGray = ColorFromHex("FFFFFF");
         private static readonly Color SectionGray = ColorFromHex("D1D1D1");
         private static readonly Color ConflictRed = ColorFromHex("D94A4A");
         private static readonly Color LocalTagColor = ColorFromHex("59e5ff");
@@ -34,6 +40,11 @@ namespace JaxTools.StateSync
         private GUIStyle stateBoxStyle;
         private GUIStyle stateLabelStyle;
         private GUIStyle stateTagStyle;
+        private GUIStyle stateNameBoxStyle;
+        private GUIStyle stateNameButtonStyle;
+        private GUIStyle stateLeftBoxStyle;
+        private GUIStyle stateButtonFrameStyle;
+        private GUIStyle assignLabelStyle;
         private int cachedStatesHash;
 
         private string parameterPrefix = "Remote_";
@@ -44,6 +55,7 @@ namespace JaxTools.StateSync
         private bool addDriverForLocalSyncState;
         private bool packIntoStateMachine;
         private bool matchTransitionTimes;
+        private string clearStatePrefix = "Remote_";
 
         private readonly Dictionary<int, int> manualStateAssignments = new();
         private readonly Dictionary<int, string> manualStateAssignmentText = new();
@@ -89,6 +101,7 @@ namespace JaxTools.StateSync
 
         private void OnGUI()
         {
+            windowScroll = EditorGUILayout.BeginScrollView(windowScroll);
             EditorGUILayout.LabelField("Animator Controller", EditorStyles.boldLabel);
 
             var newController = (AnimatorController)EditorGUILayout.ObjectField(
@@ -111,6 +124,7 @@ namespace JaxTools.StateSync
             if (controller == null)
             {
                 EditorGUILayout.HelpBox("Assign an AnimatorController to show its layers.", MessageType.Info);
+                EditorGUILayout.EndScrollView();
                 return;
             }
 
@@ -118,6 +132,7 @@ namespace JaxTools.StateSync
             if (layers == null || layers.Length == 0)
             {
                 EditorGUILayout.HelpBox("This controller has no layers.", MessageType.Warning);
+                EditorGUILayout.EndScrollView();
                 return;
             }
 
@@ -169,6 +184,7 @@ namespace JaxTools.StateSync
             if (rootSM == null)
             {
                 EditorGUILayout.HelpBox("Selected layer has no state machine.", MessageType.Warning);
+                EditorGUILayout.EndScrollView();
                 return;
             }
 
@@ -232,6 +248,29 @@ namespace JaxTools.StateSync
             }
 
             EditorGUILayout.EndVertical();
+
+            EditorGUILayout.Space(8);
+
+            prevSectionBg = GUI.backgroundColor;
+            GUI.backgroundColor = SectionGray;
+            EditorGUILayout.BeginVertical(GUI.skin.box);
+            GUI.backgroundColor = prevSectionBg;
+
+            EditorGUILayout.LabelField("Utilities", EditorStyles.boldLabel);
+            clearStatePrefix = EditorGUILayout.TextField("Clear state prefix", clearStatePrefix);
+
+            EditorGUILayout.Space(4);
+            if (GUILayout.Button("Clear states with prefix", GUILayout.Height(28)))
+            {
+                string prefixToUse = string.IsNullOrWhiteSpace(clearStatePrefix) ? parameterPrefix : clearStatePrefix;
+                Undo.RegisterCompleteObjectUndo(controller, "Clear states with prefix");
+                ClearStatesWithPrefix(rootSM, prefixToUse);
+                needsRebuildStates = true;
+            }
+
+            EditorGUILayout.EndVertical();
+
+            EditorGUILayout.EndScrollView();
         }
 
         private void DrawStatesList(AnimatorStateMachine rootSM)
@@ -264,6 +303,7 @@ namespace JaxTools.StateSync
             conflictStateNames.Clear();
             localStartStateId = FindStateIdByName(visibleStates, localTreeName);
             remoteStartStateId = FindStateIdByName(visibleStates, remoteTreeName);
+            SortStates(visibleStates, defaultState);
 
             int visibleCount = Mathf.Min(MaxVisibleStateEntries, visibleStates.Count);
             int heightCount = Mathf.Max(1, MaxVisibleStateEntries + 1);
@@ -320,53 +360,48 @@ namespace JaxTools.StateSync
                 else
                     GUI.backgroundColor = isDefault ? Orange : LightGray;
 
-                EditorGUILayout.BeginVertical(stateBoxStyle, GUILayout.Height(EntryBoxHeight));
+                var prevOuterBg = GUI.backgroundColor;
+                GUI.backgroundColor = ColorFromHex(StateButtonFrameHex);
+                EditorGUILayout.BeginVertical(stateButtonFrameStyle);
+                GUI.backgroundColor = prevOuterBg;
+
                 EditorGUILayout.BeginHorizontal(GUILayout.Height(EntryBoxHeight));
-                EditorGUILayout.BeginHorizontal(GUILayout.ExpandWidth(true));
-                GUILayout.Space(1);
 
-                DrawCentered(() =>
+                string leftTag = GetLeftTagLabel(isDefault, stateId, assignedNumber, isConflict);
+                var prevLeftBg = GUI.backgroundColor;
+                GUI.backgroundColor = GetLeftTagColor(isDefault, stateId, assignedNumber);
+                GUILayout.Label(leftTag, stateLeftBoxStyle, GUILayout.Width(StateTagBoxWidth), GUILayout.Height(EntryBoxHeight));
+                GUI.backgroundColor = prevLeftBg;
+                GUILayout.Space(2f);
+
+                EditorGUILayout.BeginVertical(GUILayout.MinWidth(StateNameMinWidth), GUILayout.ExpandWidth(true));
+                var prevButtonBg = GUI.backgroundColor;
+                GUI.backgroundColor = GetStateButtonColor(isDefault, stateId, isConflict);
+                if (GUILayout.Button(
+                    entry.Path ?? "",
+                    stateNameButtonStyle,
+                    GUILayout.Height(EntryBoxHeight),
+                    GUILayout.ExpandWidth(true)
+                ))
                 {
-                    EditorGUILayout.BeginHorizontal(GUILayout.ExpandWidth(true));
-                    if (isDefault)
-                        GUILayout.Label("Default", stateTagStyle, GUILayout.Width(56));
-                    if (stateId == localStartStateId)
-                    {
-                        var prevTagBg = GUI.backgroundColor;
-                        GUI.backgroundColor = LocalTagColor;
-                        GUILayout.Label("Local Start", stateTagStyle, GUILayout.Width(70));
-                        GUI.backgroundColor = prevTagBg;
-                    }
-                    if (stateId == remoteStartStateId)
-                    {
-                        var prevTagBg = GUI.backgroundColor;
-                        GUI.backgroundColor = RemoteTagColor;
-                        GUILayout.Label("Remote Start", stateTagStyle, GUILayout.Width(80));
-                        GUI.backgroundColor = prevTagBg;
-                    }
+                    SelectStateInAnimator(entry.State);
+                }
+                GUI.backgroundColor = prevButtonBg;
+                EditorGUILayout.EndVertical();
 
-                    GUILayout.Label(entry.Path, stateLabelStyle, GUILayout.ExpandWidth(true));
-
-                    if (isConflict)
-                        GUILayout.Label("X", stateTagStyle, GUILayout.Width(14));
-
-                    EditorGUILayout.EndHorizontal();
-                }, EntryBoxHeight);
-
-                GUILayout.FlexibleSpace();
-
+                GUILayout.Space(6f);
                 DrawCentered(() =>
                 {
                     EditorGUILayout.BeginHorizontal();
                     if (!isNonNumbered)
                     {
-                        GUILayout.Label("Assign #", EditorStyles.miniLabel, GUILayout.Width(52));
+                        GUILayout.Label("Assign #", assignLabelStyle, GUILayout.Width(60));
                         string currentNumberText = manualStateAssignmentText.TryGetValue(stateId, out string storedText)
                             ? storedText
                             : (assignedNumber >= 0 ? assignedNumber.ToString() : "");
                         string controlName = $"AssignNumber_{stateId}";
                         GUI.SetNextControlName(controlName);
-                        string nextText = EditorGUILayout.TextField(currentNumberText, GUILayout.Width(44));
+                        string nextText = EditorGUILayout.TextField(currentNumberText, GUILayout.Width(AssignInputWidth));
                         if (nextText != currentNumberText)
                         {
                             if (string.IsNullOrWhiteSpace(nextText))
@@ -388,9 +423,6 @@ namespace JaxTools.StateSync
 
                     EditorGUILayout.EndHorizontal();
                 }, EntryBoxHeight);
-
-                GUILayout.Space(1);
-                EditorGUILayout.EndHorizontal();
 
                 EditorGUILayout.EndHorizontal();
                 EditorGUILayout.EndVertical();
@@ -456,8 +488,9 @@ namespace JaxTools.StateSync
             {
                 stateLabelStyle = new GUIStyle(EditorStyles.label)
                 {
-                    fontSize = 14,
-                    alignment = TextAnchor.MiddleLeft
+                    fontSize = 15,
+                    alignment = TextAnchor.MiddleLeft,
+                    fontStyle = FontStyle.Bold
                 };
             }
 
@@ -465,6 +498,58 @@ namespace JaxTools.StateSync
             {
                 stateTagStyle = new GUIStyle(EditorStyles.miniBoldLabel)
                 {
+                    alignment = TextAnchor.MiddleLeft
+                };
+            }
+
+            if (stateNameBoxStyle == null)
+            {
+                stateNameBoxStyle = new GUIStyle(GUI.skin.box)
+                {
+                    padding = new RectOffset(10, 10, 4, 4)
+                };
+            }
+
+            if (stateNameButtonStyle == null)
+            {
+                stateNameButtonStyle = new GUIStyle(GUI.skin.button)
+                {
+                    alignment = TextAnchor.MiddleLeft,
+                    padding = new RectOffset(10, 10, 4, 4),
+                    fontStyle = FontStyle.Bold,
+                    fontSize = 15,
+                    richText = true,
+                    margin = new RectOffset(0, 0, 0, 0)
+                };
+            }
+
+            if (stateLeftBoxStyle == null)
+            {
+                stateLeftBoxStyle = new GUIStyle(GUI.skin.box)
+                {
+                    alignment = TextAnchor.MiddleCenter,
+                    fontStyle = FontStyle.Bold,
+                    fontSize = 12,
+                    margin = new RectOffset(0, 0, 0, 0),
+                    padding = new RectOffset(4, 4, 2, 2)
+                };
+            }
+
+            if (stateButtonFrameStyle == null)
+            {
+                stateButtonFrameStyle = new GUIStyle(GUI.skin.box)
+                {
+                    padding = new RectOffset(2, 2, 2, 2),
+                    margin = new RectOffset(0, 0, 0, 0)
+                };
+            }
+
+            if (assignLabelStyle == null)
+            {
+                assignLabelStyle = new GUIStyle(EditorStyles.label)
+                {
+                    fontSize = 13,
+                    fontStyle = FontStyle.Bold,
                     alignment = TextAnchor.MiddleLeft
                 };
             }
@@ -565,6 +650,30 @@ namespace JaxTools.StateSync
             return 0;
         }
 
+        private void SortStates(List<StateEntry> states, AnimatorState defaultState)
+        {
+            if (states == null || states.Count <= 1) return;
+            int defaultId = defaultState != null ? defaultState.GetInstanceID() : 0;
+            states.Sort((a, b) =>
+            {
+                int aPriority = GetStateSortPriority(a.State, defaultId);
+                int bPriority = GetStateSortPriority(b.State, defaultId);
+                int cmp = aPriority.CompareTo(bPriority);
+                if (cmp != 0) return cmp;
+                return string.Compare(a.Path, b.Path, System.StringComparison.Ordinal);
+            });
+        }
+
+        private int GetStateSortPriority(AnimatorState state, int defaultId)
+        {
+            if (state == null) return 100;
+            int id = state.GetInstanceID();
+            if (id == defaultId) return 0;
+            if (id == localStartStateId) return 1;
+            if (id == remoteStartStateId) return 2;
+            return 3;
+        }
+
         private bool IsNonNumberedState(bool isDefault, int stateId)
         {
             return isDefault || stateId == localStartStateId || stateId == remoteStartStateId;
@@ -578,6 +687,47 @@ namespace JaxTools.StateSync
             return autoNumber;
         }
 
+        private string GetLeftTagLabel(bool isDefault, int stateId, int assignedNumber, bool isConflict)
+        {
+            if (isConflict)
+                return "Conflicting";
+            if (isDefault)
+                return "Default";
+            if (stateId == localStartStateId)
+                return "Local";
+            if (stateId == remoteStartStateId)
+                return "Remote";
+            if (assignedNumber >= 0)
+                return $"#{assignedNumber}";
+            return "Not Assigned";
+        }
+
+        private Color GetLeftTagColor(bool isDefault, int stateId, int assignedNumber)
+        {
+            if (isDefault)
+                return Orange;
+            if (stateId == localStartStateId)
+                return LocalTagColor;
+            if (stateId == remoteStartStateId)
+                return RemoteTagColor;
+            if (assignedNumber >= 0)
+                return LightGray;
+            return ColorFromHex(StateLeftEmptyHex);
+        }
+
+        private Color GetStateButtonColor(bool isDefault, int stateId, bool isConflict)
+        {
+            if (isConflict)
+                return ConflictRed;
+            if (isDefault)
+                return Orange;
+            if (stateId == localStartStateId)
+                return LocalTagColor;
+            if (stateId == remoteStartStateId)
+                return RemoteTagColor;
+            return LightGray;
+        }
+
         private static int ParseTrailingNumber(string name)
         {
             if (string.IsNullOrEmpty(name)) return -1;
@@ -588,6 +738,43 @@ namespace JaxTools.StateSync
 
             string digits = name[(i + 1)..];
             return int.TryParse(digits, out int value) ? value : -1;
+        }
+
+        private void SelectStateInAnimator(AnimatorState state)
+        {
+            if (state == null) return;
+            if (controller != null)
+                AssetDatabase.OpenAsset(controller);
+
+            Selection.activeObject = state;
+            EditorGUIUtility.PingObject(state);
+        }
+
+        private static int ClearStatesWithPrefix(AnimatorStateMachine root, string prefix)
+        {
+            if (root == null || string.IsNullOrEmpty(prefix)) return 0;
+            return ClearStatesWithPrefixRecursive(root, prefix);
+        }
+
+        private static int ClearStatesWithPrefixRecursive(AnimatorStateMachine sm, string prefix)
+        {
+            int removed = 0;
+            var states = sm.states;
+            for (int i = states.Length - 1; i >= 0; i--)
+            {
+                var state = states[i].state;
+                if (state != null && state.name.StartsWith(prefix, System.StringComparison.Ordinal))
+                {
+                    sm.RemoveState(state);
+                    removed++;
+                }
+            }
+
+            var childStateMachines = sm.stateMachines;
+            for (int i = 0; i < childStateMachines.Length; i++)
+                removed += ClearStatesWithPrefixRecursive(childStateMachines[i].stateMachine, prefix);
+
+            return removed;
         }
 
     }
